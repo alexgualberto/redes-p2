@@ -4,7 +4,7 @@ import time
 import secrets
 from tcputils import *
 
-MSS = 1460  # Maximum Segment Size
+MSS = 1460  # Tamanho Máximo do Segmento
 
 class Servidor:
     def __init__(self, rede, porta):
@@ -28,7 +28,7 @@ class Servidor:
             checksum,
             urg_ptr,
         ) = read_header(segment)
-
+    
         if dst_port != self.porta:
             return
         if (
@@ -38,11 +38,11 @@ class Servidor:
             print("descartando segmento com checksum incorreto")
             return
 
-        payload = segment[4 * (flags >> 12):]
+        payload = segment[4 * (flags >> 12) :]
         id_conexao = (src_addr, src_port, dst_addr, dst_port)
-
+    
         if (flags & FLAGS_SYN) == FLAGS_SYN:
-            # Initializing connection and sending SYN + ACK
+            # Inicializando conexão e enviando SYN + ACK
             seq_no_svr = secrets.randbelow(65535)
             ack_no_svr = seq_no + 1
             header = make_header(dst_port, src_port, seq_no_svr, ack_no_svr, FLAGS_SYN | FLAGS_ACK)
@@ -58,7 +58,7 @@ class Servidor:
                 "%s:%d -> %s:%d (pacote associado a conexão desconhecida)"
                 % (src_addr, src_port, dst_addr, dst_port)
             )
-
+            
     def inic_conexao(self, id_conexao, segment):
         _, _, seq_no, _, flags, _, _, _ = read_header(segment)
         src_addr, src_port, dst_addr, dst_port = id_conexao
@@ -69,7 +69,6 @@ class Servidor:
         self.rede.enviar(seg_ack, src_addr)
         return Conexao(self, id_conexao, ack_no, seq_no + 1)
 
-
 class Conexao:
     def __init__(self, servidor, id_conexao, ack_no, seq_no):
         self.servidor = servidor
@@ -78,7 +77,7 @@ class Conexao:
         self.temp_ini = None
         self.temp_fin = None
         self.timer = None
-        self.devr = None
+        self.devr = None  
         self.ack_no = ack_no
         self.seq_no = seq_no
         self.sendb = seq_no
@@ -91,7 +90,7 @@ class Conexao:
         self.window = 1
         self.closing = False
         self.retransm = False
-
+        
     def timer_limit(self):
         self.timer = None
         self.window = max(self.window // 2, 1)
@@ -102,62 +101,48 @@ class Conexao:
         if self.timer:
             self.timer_para()
         self.timer = asyncio.get_event_loop().call_later(self.interv, self.timer_limit)
-
+        
     def timer_para(self):
-        if self.timer:
-            self.timer.cancel()
-            self.timer = None
+        self.timer.cancel()
+        self.timer = None
 
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
-        if self.ack_no == seq_no:  # Check if the sequence number is what we expect
-            # Correctly ordered segment
-            self.ack_no += len(payload)  # Move acknowledgment number forward
-            if payload:
-                self.callback(self, payload)  # Deliver to application layer
-            # Send acknowledgment back with the correct sequence numbers
-            ack_segment = make_header(
-                self.id_conexao[3],  # Destination port (server's port)
-                self.id_conexao[1],  # Source port (client's port)
-                self.seq_no,         # Sequence number of the server
-                self.ack_no,         # Acknowledgment number for the client
-                FLAGS_ACK
-            )
-            # Ensure checksum is correct
-            ack_segment = fix_checksum(
-                ack_segment, self.id_conexao[2], self.id_conexao[0]
-            )
-            self.servidor.rede.enviar(ack_segment, self.id_conexao[0])  # Send ACK back
-
-            # If the connection is closing, handle FIN
-            if (flags & FLAGS_FIN) == FLAGS_FIN and not self.closing:
-                self.closing = True
-                self.callback(self, b"")
-                self.ack_no += 1
-                fin_segment = make_header(
-                    self.id_conexao[3], self.id_conexao[1], self.seq_no, self.ack_no, FLAGS_ACK | FLAGS_FIN
-                )
-                fin_segment = fix_checksum(fin_segment, self.id_conexao[2], self.id_conexao[0])
-                self.servidor.rede.enviar(fin_segment, self.id_conexao[0])
-                return
-
-        elif seq_no > self.ack_no:
-            # Out-of-order packet; ignore it for now
+        if self.ack_no != seq_no:
+            return
+        if (flags & FLAGS_FIN) == FLAGS_FIN and not self.closing:
+            self.closing = True 
+            self.callback(self, b"")
+            self.ack_no = self.ack_no + 1
+            self.enviar_seg_ack(b"") 
+        elif (flags & FLAGS_ACK) == FLAGS_ACK and self.closing:
+            del self.servidor.conexoes[self.id_conexao]
             return
 
-        # Acknowledge any packets with the correct sequence number, even if empty
         if (flags & FLAGS_ACK) == FLAGS_ACK and ack_no > self.sendb:
-            # Advance unacked and window
-            self.unacked = self.unacked[ack_no - self.sendb:]
+            self.unacked = self.unacked[ack_no - self.sendb :]
+            self.byt_ack = ack_no - self.sendb
             self.sendb = ack_no
-            if not self.retransm:
-                self.temp_fin = time.time()
-                self.calcula_rtt()
+            if self.unacked:
+                self.timer_inic()
             else:
-                self.retransm = False
+                if self.timer:
+                    self.timer_para()
+                if not self.retransm:
+                    self.temp_fin = time.time()
+                    self.calcula_rtt()   
+                else:
+                    self.retransm = False
 
-            # Adjust window size according to received ACKs
-            self.window = min(self.window + 1, len(self.unsent) // MSS)
+        if self.byt_ack >= MSS:
+            self.byt_ack = self.byt_ack + MSS
+            self.window = self.window + 1
             self.envio_pendente()
+
+        if payload:
+            self.ack_no = self.ack_no + len(payload)
+            self.callback(self, payload)
+            pac = fix_checksum(make_header(self.id_conexao[1], self.id_conexao[3], self.seq_no, self.ack_no, flags), self.id_conexao[0], self.id_conexao[2],)
+            self.servidor.rede.enviar(pac, self.id_conexao[2])
 
     def registrar_recebedor(self, callback):
         self.callback = callback
@@ -165,17 +150,17 @@ class Conexao:
     def enviar(self, dados):
         self.unsent = self.unsent + dados
         pront = self.unsent[: (self.window * MSS)]
-        self.unsent = self.unsent[(self.window * MSS):]
+        self.unsent = self.unsent[(self.window * MSS) :]
         self.ult_seq = self.seq_no + len(pront)
         n_segment = math.ceil(len(pront) / MSS)
         for i in range(n_segment):
-            segment = pront[i * MSS: (i + 1) * MSS]
+            segment = pront[i * MSS : (i + 1) * MSS]
             self.enviar_seg_ack(segment)
 
     def fechar(self):
         ack_segment = make_header(self.id_conexao[3], self.id_conexao[1], self.seq_no, self.ack_no, FLAGS_FIN)
         self.servidor.rede.enviar(fix_checksum(ack_segment, self.id_conexao[2], self.id_conexao[0]), self.id_conexao[0])
-
+        
     def retrans(self):
         self.retransm = True
         tam = min(MSS, len(self.unacked))
@@ -190,12 +175,12 @@ class Conexao:
             seq_no = self.seq_no
             self.seq_no = self.seq_no + len(data)
             self.unacked = self.unacked + data
-            self.temp_ini = time.time()
+            self.temp_ini = time.time()        
         pac = make_header(self.id_conexao[1], self.id_conexao[3], seq_no, self.ack_no, FLAGS_ACK)
         ack_segment = fix_checksum(pac + data, self.id_conexao[0], self.id_conexao[2])
         self.servidor.rede.enviar(ack_segment, self.id_conexao[1])
         if not self.timer and not self.closing:
-            self.timer_inic()
+            self.timer_inic() 
 
     def envio_pendente(self):
         tam_pendente = (self.window * MSS) - len(self.unacked)
@@ -204,11 +189,11 @@ class Conexao:
             self.unsent = self.unsent[tam_pendente:]
             self.ult_seq = self.seq_no + len(pront)
             n_segment = math.ceil(len(pront) / MSS)
-
+            
             for i in range(n_segment):
-                segment = pront[i * MSS: (i + 1) * MSS]
+                segment = pront[i * MSS : (i + 1) * MSS]
                 self.enviar_seg_ack(segment)
-
+                         
     def calcula_rtt(self):
         self.sample_rtt = self.temp_fin - self.temp_ini
         if self.iter_inic:
