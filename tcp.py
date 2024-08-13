@@ -18,46 +18,46 @@ class Servidor:
         self.callback = callback
 
     def _rdt_rcv(self, src_addr, dst_addr, segment):
-    (
-        src_port,
-        dst_port,
-        seq_no,
-        ack_no,
-        flags,
-        window_size,
-        checksum,
-        urg_ptr,
-    ) = read_header(segment)
+        (
+            src_port,
+            dst_port,
+            seq_no,
+            ack_no,
+            flags,
+            window_size,
+            checksum,
+            urg_ptr,
+        ) = read_header(segment)
 
-    if dst_port != self.porta:
-        return
-    if (
-        not self.rede.ignore_checksum
-        and calc_checksum(segment, src_addr, dst_addr) != 0
-    ):
-        print("descartando segmento com checksum incorreto")
-        return
+        if dst_port != self.porta:
+            return
+        if (
+            not self.rede.ignore_checksum
+            and calc_checksum(segment, src_addr, dst_addr) != 0
+        ):
+            print("descartando segmento com checksum incorreto")
+            return
 
-    payload = segment[4 * (flags >> 12) :]
-    id_conexao = (src_addr, src_port, dst_addr, dst_port)
+        payload = segment[4 * (flags >> 12):]
+        id_conexao = (src_addr, src_port, dst_addr, dst_port)
 
-    if (flags & FLAGS_SYN) == FLAGS_SYN:
-        # Inicializando conexão e enviando SYN + ACK
-        seq_no_svr = secrets.randbelow(65535)
-        ack_no_svr = seq_no + 1
-        header = make_header(dst_port, src_port, seq_no_svr, ack_no_svr, FLAGS_SYN | FLAGS_ACK)
-        segment_svr = fix_checksum(header, dst_addr, src_addr)
-        self.rede.enviar(segment_svr, src_addr)
-        conexao = self.conexoes[id_conexao] = Conexao(self, id_conexao, ack_no_svr, seq_no_svr + 1)
-        if self.callback:
-            self.callback(conexao)
-    elif id_conexao in self.conexoes:
-        self.conexoes[id_conexao]._rdt_rcv(seq_no, ack_no, flags, payload)
-    else:
-        print(
-            "%s:%d -> %s:%d (pacote associado a conexão desconhecida)"
-            % (src_addr, src_port, dst_addr, dst_port)
-        )
+        if (flags & FLAGS_SYN) == FLAGS_SYN:
+            # Inicializando conexão e enviando SYN + ACK
+            seq_no_svr = secrets.randbelow(65535)
+            ack_no_svr = seq_no + 1
+            header = make_header(dst_port, src_port, seq_no_svr, ack_no_svr, FLAGS_SYN | FLAGS_ACK)
+            segment_svr = fix_checksum(header, dst_addr, src_addr)
+            self.rede.enviar(segment_svr, src_addr)
+            conexao = self.conexoes[id_conexao] = Conexao(self, id_conexao, ack_no_svr, seq_no_svr + 1)
+            if self.callback:
+                self.callback(conexao)
+        elif id_conexao in self.conexoes:
+            self.conexoes[id_conexao]._rdt_rcv(seq_no, ack_no, flags, payload)
+        else:
+            print(
+                "%s:%d -> %s:%d (pacote associado a conexão desconhecida)"
+                % (src_addr, src_port, dst_addr, dst_port)
+            )
             
     def inic_conexao(self, id_conexao, segment):
         _, _, seq_no, _, flags, _, _, _ = read_header(segment)
@@ -106,7 +106,7 @@ class Conexao:
         self.timer.cancel()
         self.timer = None
 
-     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
+    def _rdt_rcv(self, seq_no, ack_no, flags, payload):
         if seq_no == self.ack_no:
             # Atualizar número de reconhecimento para o próximo esperado
             self.ack_no += len(payload)
@@ -212,4 +212,4 @@ class Conexao:
         else:
             self.estimated_rtt = ((0.75) * self.estimated_rtt) + (0.25 * self.sample_rtt)
             self.devr = ((0.5) * self.devr) + (0.5 * abs(self.sample_rtt - self.estimated_rtt))
-        self.interv = self.estimated_rtt + (4 * self.devr) 
+        self.interv = self.estimated_rtt + (4 * self.devr)
