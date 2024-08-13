@@ -1,10 +1,9 @@
 import asyncio
 from tcputils import *
-import os
 import time
 import random
 
-MSS = 1460  # Definindo o tamanho máximo do segmento
+MSS = 1460  # Tamanho máximo do segmento TCP (Maximum Segment Size)
 
 def estimatedRTT(prev_val, alpha, SRTT):
     return (1 - alpha) * prev_val + alpha * SRTT
@@ -87,47 +86,41 @@ class Conexao:
         self.cwnd = 1 * MSS
         self.ssthresh = 64 * MSS
         self.dup_ack_count = 0
+        self.unacked_segments = {}  # Dicionário para guardar segmentos não confirmados
 
-    def start_timer(self, data, dst_addr):
+    def start_timer(self, segment, dst_addr):
         timeout = 1
         if self.ERTT is not None:
             timeout = TimeoutInterval(self.ERTT, self.DRTT)
-            self.ERTT = estimatedRTT(self.ERTT, 0.125, self.SRTT)
-            self.DRTT = devRTT(self.DRTT, 0.25, self.SRTT, self.ERTT)
-        self.timer = asyncio.get_event_loop().call_later(timeout, self.timeout, data, dst_addr)
+        self.timer = asyncio.get_event_loop().call_later(timeout, self.timeout, segment, dst_addr)
 
     def timeout(self, segment, dst_addr):
+        print("Timeout ocorreu. Retransmitindo...")
         self.timer_running = False
         self.ssthresh = max(self.cwnd // 2, 1 * MSS)
         self.cwnd = 1 * MSS
         self.retransmit(segment, dst_addr)
 
     def retransmit(self, segment, dst_addr):
-        print("Retransmitindo segmento...")
         self.servidor.rede.enviar(segment, dst_addr)
         self.start_timer(segment, dst_addr)
 
     def confirmar_pacote(self, ack_no):
-        self.timer_running = False
         if self.timer:
             self.timer.cancel()
+        self.timer_running = False
+
+        keys_to_remove = [k for k in self.unacked_segments.keys() if k <= ack_no]
+        for key in keys_to_remove:
+            del self.unacked_segments[key]
+
+        if len(self.unacked_segments) == 0:
+            self.timer_running = False
+
         if self.cwnd < self.ssthresh:
             self.cwnd += MSS
         else:
             self.cwnd += MSS * (MSS / self.cwnd)
-
-        if len(self.segments) != 0:
-            segment = self.segments.pop(0)
-            self.seq_no = ack_no
-            if len(self.segments) != 0:
-                next_seg = self.segments[0]
-                src_addr, src_port, dst_addr, dst_port = self.id_conexao
-                payload = next_seg[4 * (FLAGS_ACK >> 12):]
-                gambiarra = fix_checksum(make_header(src_port, dst_port, self.seq_no, self.ack_no, FLAGS_ACK) + payload, src_addr, dst_addr)
-                self.servidor.rede.enviar(gambiarra, dst_addr)
-                self.timer_running = True
-                self.time_SRTT = time.time()
-                self.start_timer(gambiarra, dst_addr)
 
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
         src_addr, src_port, dst_addr, dst_port = self.id_conexao
@@ -168,6 +161,7 @@ class Conexao:
             new_segment = fix_checksum(make_header(src_port, dst_port, self.next_seq_no + seqno_add, self.ack_no, FLAGS_ACK) + data, src_addr, dst_addr)
             seqno_add += len(data)
             self.segments.append(new_segment)
+            self.unacked_segments[self.next_seq_no + seqno_add] = new_segment
             if not self.timer_running:
                 self.time_SRTT = time.time()
                 self.servidor.rede.enviar(new_segment, dst_addr)
