@@ -107,63 +107,55 @@ class Conexao:
         self.timer = None
 
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
-        # Check if the segment is in order and not a duplicate
-        if seq_no == self.ack_no:
-            # Correct segment received
-            self.ack_no += len(payload)
-            
-            # Pass the payload to the application layer
+        # Ensure the packet is in order and acknowledge it
+        if seq_no == self.ack_no:  # Check if the sequence number is what we expect
+            # Correctly ordered segment
+            self.ack_no += len(payload)  # Move acknowledgment number forward
             if payload:
-                self.callback(self, payload)
-            
-            # Send an ACK for the received segment
-            ack_segment = make_header(self.id_conexao[1], self.id_conexao[3], self.seq_no, self.ack_no, FLAGS_ACK)
-            ack_segment = fix_checksum(ack_segment, self.id_conexao[0], self.id_conexao[2])
-            self.servidor.rede.enviar(ack_segment, self.id_conexao[2])
-        else:
-            # Out-of-order or duplicate segment
-            # We could drop it silently or log it for debugging
-            print(f"Out-of-order segment received: expected {self.ack_no}, got {seq_no}")
-    
-        # Check if it's a FIN segment, indicating a closing connection
-        if (flags & FLAGS_FIN) == FLAGS_FIN and not self.closing:
-            self.closing = True 
-            self.callback(self, b"")  # Notify application layer of closing
-            self.ack_no += 1
-            # Send FIN ACK
-            fin_ack_segment = make_header(self.id_conexao[1], self.id_conexao[3], self.seq_no, self.ack_no, FLAGS_ACK)
-            fin_ack_segment = fix_checksum(fin_ack_segment, self.id_conexao[0], self.id_conexao[2])
-            self.servidor.rede.enviar(fin_ack_segment, self.id_conexao[2])
-        elif (flags & FLAGS_ACK) == FLAGS_ACK and self.closing:
-            # Connection fully closed
-            del self.servidor.conexoes[self.id_conexao]
-    
-        # Handle acknowledgment of sent data
+                self.callback(self, payload)  # Deliver to application layer
+            # Send acknowledgment back with the correct sequence numbers
+            ack_segment = make_header(
+                self.id_conexao[3],  
+                self.id_conexao[1],  
+                self.seq_no,         
+                self.ack_no,         
+                FLAGS_ACK
+            )
+            ack_segment = fix_checksum(
+                ack_segment, self.id_conexao[2], self.id_conexao[0]
+            )
+            self.servidor.rede.enviar(ack_segment, self.id_conexao[0])  # Send ACK back
+
+            # If the connection is closing, handle FIN
+            if (flags & FLAGS_FIN) == FLAGS_FIN:
+                self.closing = True
+                self.callback(self, b"")
+                self.ack_no += 1
+                fin_segment = make_header(
+                    self.id_conexao[3], self.id_conexao[1], self.seq_no, self.ack_no, FLAGS_ACK | FLAGS_FIN
+                )
+                fin_segment = fix_checksum(fin_segment, self.id_conexao[2], self.id_conexao[0])
+                self.servidor.rede.enviar(fin_segment, self.id_conexao[0])
+                return
+
+        elif seq_no > self.ack_no:
+            # Out-of-order packet; ignore it for now
+            return
+
+        # Acknowledge any packets with the correct sequence number, even if empty
         if (flags & FLAGS_ACK) == FLAGS_ACK and ack_no > self.sendb:
+            # Advance unacked and window
             self.unacked = self.unacked[ack_no - self.sendb:]
-            self.byt_ack = ack_no - self.sendb
             self.sendb = ack_no
-            if self.unacked:
-                self.timer_inic()
+            if not self.retransm:
+                self.temp_fin = time.time()
+                self.calcula_rtt()
             else:
-                if self.timer:
-                    self.timer_para()
-                if not self.retransm:
-                    self.temp_fin = time.time()
-                    self.calcula_rtt()
-                else:
-                    self.retransm = False
+                self.retransm = False
 
-        if self.byt_ack >= MSS:
-            self.byt_ack = self.byt_ack + MSS
-            self.window = self.window + 1
+            # Adjust window size according to received ACKs
+            self.window = min(self.window + 1, len(self.unsent) // MSS)
             self.envio_pendente()
-
-        if payload:
-            self.ack_no = self.ack_no + len(payload)
-            self.callback(self, payload)
-            pac = fix_checksum(make_header(self.id_conexao[1], self.id_conexao[3], self.seq_no, self.ack_no, flags), self.id_conexao[0], self.id_conexao[2],)
-            self.servidor.rede.enviar(pac, self.id_conexao[2])
 
     def registrar_recebedor(self, callback):
         self.callback = callback
@@ -224,4 +216,4 @@ class Conexao:
         else:
             self.estimated_rtt = ((0.75) * self.estimated_rtt) + (0.25 * self.sample_rtt)
             self.devr = ((0.5) * self.devr) + (0.5 * abs(self.sample_rtt - self.estimated_rtt))
-        self.interv = self.estimated_rtt + (4 * self.devr) 
+        self.interv = self.estimated_rtt + (4 * self.devr)
