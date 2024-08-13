@@ -4,7 +4,7 @@ import time
 import secrets
 from tcputils import *
 
-MSS = 1460  # Tamanho Máximo do Segmento
+MSS = 1460  # Maximum Segment Size
 
 class Servidor:
     def __init__(self, rede, porta):
@@ -42,7 +42,7 @@ class Servidor:
         id_conexao = (src_addr, src_port, dst_addr, dst_port)
 
         if (flags & FLAGS_SYN) == FLAGS_SYN:
-            # Inicializando conexão e enviando SYN + ACK
+            # Initializing connection and sending SYN + ACK
             seq_no_svr = secrets.randbelow(65535)
             ack_no_svr = seq_no + 1
             header = make_header(dst_port, src_port, seq_no_svr, ack_no_svr, FLAGS_SYN | FLAGS_ACK)
@@ -104,8 +104,9 @@ class Conexao:
         self.timer = asyncio.get_event_loop().call_later(self.interv, self.timer_limit)
 
     def timer_para(self):
-        self.timer.cancel()
-        self.timer = None
+        if self.timer:
+            self.timer.cancel()
+            self.timer = None
 
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
         if self.ack_no == seq_no:  # Check if the sequence number is what we expect
