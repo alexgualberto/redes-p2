@@ -58,16 +58,6 @@ class Servidor:
                 "%s:%d -> %s:%d (pacote associado a conexão desconhecida)"
                 % (src_addr, src_port, dst_addr, dst_port)
             )
-            
-    def inic_conexao(self, id_conexao, segment):
-        _, _, seq_no, _, flags, _, _, _ = read_header(segment)
-        src_addr, src_port, dst_addr, dst_port = id_conexao
-        ack_no = seq_no + 1
-        seq_no = secrets.randbelow(10)
-        seg_ack = make_header(dst_port, src_port, seq_no, ack_no, FLAGS_ACK | FLAGS_SYN)
-        seg_ack = fix_checksum(seg_ack, src_addr, dst_addr)
-        self.rede.enviar(seg_ack, src_addr)
-        return Conexao(self, id_conexao, ack_no, seq_no + 1)
 
 class Conexao:
     def __init__(self, servidor, id_conexao, ack_no, seq_no):
@@ -111,7 +101,7 @@ class Conexao:
             # Atualizar número de reconhecimento para o próximo esperado
             self.ack_no += len(payload)
             self.callback(self, payload)
-    
+
             # Enviar ACK vazio para confirmar o recebimento
             header = make_header(self.id_conexao[1], self.id_conexao[3], self.seq_no, self.ack_no, FLAGS_ACK)
             ack_segment = fix_checksum(header, self.id_conexao[0], self.id_conexao[2])
