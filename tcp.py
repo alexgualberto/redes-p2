@@ -30,7 +30,7 @@ class Servidor:
             checksum,
             urg_ptr,
         ) = read_header(segment)
-
+    
         if dst_port != self.porta:
             return
         if (
@@ -42,7 +42,7 @@ class Servidor:
 
         payload = segment[4 * (flags >> 12) :]
         id_conexao = (src_addr, src_port, dst_addr, dst_port)
-
+    
         if (flags & FLAGS_SYN) == FLAGS_SYN:
             # Inicializando conexão e enviando SYN + ACK
             seq_no_svr = secrets.randbelow(65535)
