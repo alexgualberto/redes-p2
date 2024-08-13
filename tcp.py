@@ -107,19 +107,40 @@ class Conexao:
         self.timer = None
 
     def _rdt_rcv(self, seq_no, ack_no, flags, payload):
-        if self.ack_no != seq_no:
-            return
+        # Check if the segment is in order and not a duplicate
+        if seq_no == self.ack_no:
+            # Correct segment received
+            self.ack_no += len(payload)
+            
+            # Pass the payload to the application layer
+            if payload:
+                self.callback(self, payload)
+            
+            # Send an ACK for the received segment
+            ack_segment = make_header(self.id_conexao[1], self.id_conexao[3], self.seq_no, self.ack_no, FLAGS_ACK)
+            ack_segment = fix_checksum(ack_segment, self.id_conexao[0], self.id_conexao[2])
+            self.servidor.rede.enviar(ack_segment, self.id_conexao[2])
+        else:
+            # Out-of-order or duplicate segment
+            # We could drop it silently or log it for debugging
+            print(f"Out-of-order segment received: expected {self.ack_no}, got {seq_no}")
+    
+        # Check if it's a FIN segment, indicating a closing connection
         if (flags & FLAGS_FIN) == FLAGS_FIN and not self.closing:
             self.closing = True 
-            self.callback(self, b"")
-            self.ack_no = self.ack_no + 1
-            self.enviar_seg_ack(b"") 
+            self.callback(self, b"")  # Notify application layer of closing
+            self.ack_no += 1
+            # Send FIN ACK
+            fin_ack_segment = make_header(self.id_conexao[1], self.id_conexao[3], self.seq_no, self.ack_no, FLAGS_ACK)
+            fin_ack_segment = fix_checksum(fin_ack_segment, self.id_conexao[0], self.id_conexao[2])
+            self.servidor.rede.enviar(fin_ack_segment, self.id_conexao[2])
         elif (flags & FLAGS_ACK) == FLAGS_ACK and self.closing:
+            # Connection fully closed
             del self.servidor.conexoes[self.id_conexao]
-            return
-
+    
+        # Handle acknowledgment of sent data
         if (flags & FLAGS_ACK) == FLAGS_ACK and ack_no > self.sendb:
-            self.unacked = self.unacked[ack_no - self.sendb :]
+            self.unacked = self.unacked[ack_no - self.sendb:]
             self.byt_ack = ack_no - self.sendb
             self.sendb = ack_no
             if self.unacked:
@@ -129,7 +150,7 @@ class Conexao:
                     self.timer_para()
                 if not self.retransm:
                     self.temp_fin = time.time()
-                    self.calcula_rtt()   
+                    self.calcula_rtt()
                 else:
                     self.retransm = False
 
