@@ -63,13 +63,14 @@ class Conexao:
         # Verifica se o segmento está no número de sequência esperado
         if seq_no == self.ack_no:
             self.ack_no += len(payload)
-            self.callback(self, payload)
-            ack_segment = fix_checksum(
-                make_header(dst_port, src_port, self.seq_no, self.ack_no, FLAGS_ACK),
-                dst_addr,
-                src_addr,
-            )
-            self.servidor.rede.enviar(ack_segment, src_addr)
+            if payload:
+                self.callback(self, payload)
+                ack_segment = fix_checksum(
+                    make_header(dst_port, src_port, self.seq_no, self.ack_no, FLAGS_ACK),
+                    dst_addr,
+                    src_addr,
+                )
+                self.servidor.rede.enviar(ack_segment, src_addr)
 
         if (flags & FLAGS_FIN) == FLAGS_FIN:
             self.ack_no += 1
