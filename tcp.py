@@ -1,8 +1,10 @@
 import asyncio
-from tcputils import *
-import time
 import math
+import time
 import secrets
+from tcputils import *
+
+MSS = 1460  # Tamanho Máximo do Segmento
 
 class Servidor:
     def __init__(self, rede, porta):
@@ -13,47 +15,53 @@ class Servidor:
         self.rede.registrar_recebedor(self._rdt_rcv)
 
     def registrar_monitor_de_conexoes_aceitas(self, callback):
-        """
-        Usado pela camada de aplicação para registrar uma função para ser chamada
-        sempre que uma nova conexão for aceita
-        """
         self.callback = callback
 
     def _rdt_rcv(self, src_addr, dst_addr, segment):
-        src_port, dst_port, seq_no, ack_no, \
-            flags, window_size, checksum, urg_ptr = read_header(segment)
+        (
+            src_port,
+            dst_port,
+            seq_no,
+            ack_no,
+            flags,
+            window_size,
+            checksum,
+            urg_ptr,
+        ) = read_header(segment)
 
         if dst_port != self.porta:
-            # Ignora segmentos que não são destinados à porta do nosso servidor
             return
-        if not self.rede.ignore_checksum and calc_checksum(segment, src_addr, dst_addr) != 0:
-            print('descartando segmento com checksum incorreto')
+        if (
+            not self.rede.ignore_checksum
+            and calc_checksum(segment, src_addr, dst_addr) != 0
+        ):
+            print("descartando segmento com checksum incorreto")
             return
 
-        payload = segment[4*(flags>>12):]
+        payload = segment[4 * (flags >> 12) :]
         id_conexao = (src_addr, src_port, dst_addr, dst_port)
 
         if (flags & FLAGS_SYN) == FLAGS_SYN:
             conexao = self.conexoes[id_conexao] = self.inic_conexao(id_conexao, segment)
             if self.callback:
                 self.callback(conexao)
-                
         elif id_conexao in self.conexoes:
-            # Passa para a conexão adequada se ela já estiver estabelecida
             self.conexoes[id_conexao]._rdt_rcv(seq_no, ack_no, flags, payload)
         else:
-            print('%s:%d -> %s:%d (pacote associado a conexão desconhecida)' %
-                  (src_addr, src_port, dst_addr, dst_port))
+            print(
+                "%s:%d -> %s:%d (pacote associado a conexão desconhecida)"
+                % (src_addr, src_port, dst_addr, dst_port)
+            )
             
     def inic_conexao(self, id_conexao, segment):
-    	_, _, seq_no, _, flags, _, _, _ = read_header(segment)
-    	src_addr, src_port, dst_addr, dst_port = id_conexao
-    	ack_no = seq_no + 1
-    	seq_no = secrets.randbelow(10)
-    	seg_ack = make_header(dst_port, src_port, seq_no, ack_no, FLAGS_ACK | FLAGS_SYN)
-    	seg_ack = fix_checksum(seg_ack, src_addr, dst_addr)
-    	self.rede.enviar(seg_ack, src_addr)
-    	return Conexao(self, id_conexao, ack_no, seq_no + 1)    
+        _, _, seq_no, _, flags, _, _, _ = read_header(segment)
+        src_addr, src_port, dst_addr, dst_port = id_conexao
+        ack_no = seq_no + 1
+        seq_no = secrets.randbelow(10)
+        seg_ack = make_header(dst_port, src_port, seq_no, ack_no, FLAGS_ACK | FLAGS_SYN)
+        seg_ack = fix_checksum(seg_ack, src_addr, dst_addr)
+        self.rede.enviar(seg_ack, src_addr)
+        return Conexao(self, id_conexao, ack_no, seq_no + 1)
 
 class Conexao:
     def __init__(self, servidor, id_conexao, ack_no, seq_no):
@@ -71,7 +79,7 @@ class Conexao:
         self.unacked = b""
         self.unsent = b""
         self.byt_ack = 0
-        self.interv = 0.8
+        self.interv = 1
         self.iter_inic = True
         self.window = 1
         self.closing = False
@@ -104,7 +112,7 @@ class Conexao:
             del self.servidor.conexoes[self.id_conexao]
             return
 
-        if(flags & FLAGS_ACK) == FLAGS_ACK and ack_no > self.sendb :
+        if (flags & FLAGS_ACK) == FLAGS_ACK and ack_no > self.sendb:
             self.unacked = self.unacked[ack_no - self.sendb :]
             self.byt_ack = ack_no - self.sendb
             self.sendb = ack_no
@@ -115,15 +123,15 @@ class Conexao:
                     self.timer_para()
                 if not self.retransm:
                     self.temp_fin = time.time()
-                    
                     self.calcula_rtt()   
                 else:
                     self.retransm = False
 
-        if self.byt_ack == MSS:
+        if self.byt_ack >= MSS:
             self.byt_ack = self.byt_ack + MSS
             self.window = self.window + 1
             self.envio_pendente()
+
         if payload:
             self.ack_no = self.ack_no + len(payload)
             self.callback(self, payload)
@@ -133,10 +141,6 @@ class Conexao:
     # Os métodos abaixo fazem parte da API
 
     def registrar_recebedor(self, callback):
-        """
-        Usado pela camada de aplicação para registrar uma função para ser chamada
-        sempre que dados forem corretamente recebidos
-        """
         self.callback = callback
 
     def enviar(self, dados):
@@ -195,4 +199,4 @@ class Conexao:
         else:
             self.estimated_rtt = ((0.75) * self.estimated_rtt) + (0.25 * self.sample_rtt)
             self.devr = ((0.5) * self.devr) + (0.5 * abs(self.sample_rtt - self.estimated_rtt))
-        self.interv = self.estimated_rtt + (4 * self.devr)   
+        self.interv = self.estimated_rtt + (4 * self.devr) 
