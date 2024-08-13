@@ -2,6 +2,7 @@ import asyncio
 import math
 import time
 import secrets
+from tcputils import *
 
 MSS = 1460  # Tamanho Máximo do Segmento
 
